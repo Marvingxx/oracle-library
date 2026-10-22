@@ -1,0 +1,13 @@
+[package]
+name = "oracle-library"
+description = "Oracle's asset library: indexes a folder of creative resources and searches it in French and English."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+unicode-normalization = "0.1"
+dirs = "6"
