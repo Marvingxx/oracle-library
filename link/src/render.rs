@@ -61,7 +61,33 @@ pub fn render_stable(source: &Path, preview: Preview) -> Result<PathBuf, String>
         std::fs::write(&part, &fresh).map_err(|e| format!("{} : {e}", part.display()))?;
         std::fs::rename(&part, &stable).map_err(|e| format!("{} : {e}", stable.display()))?;
     }
+    // Where it comes from, for refresh_stable.
+    let origin = std::path::absolute(source).unwrap_or_else(|_| source.to_path_buf());
+    let _ = std::fs::write(source_note(&stable), origin.to_string_lossy().as_bytes()); // Without it, refresh does nothing.
     Ok(stable)
+}
+
+/// The note beside a stable drawing that names its document.
+fn source_note(stable: &Path) -> PathBuf {
+    let mut name = stable.as_os_str().to_owned();
+    name.push(".source");
+    PathBuf::from(name)
+}
+
+/// Draws again a stable drawing ([`render_stable`]) whose document changed since: an app that keeps
+/// the drawing's path calls it before looking whether its files changed. `Ok(false)` for any other
+/// file, or a document unchanged (nothing is run: the drawing of its current version is cached).
+pub fn refresh_stable(stable: &Path) -> Result<bool, String> {
+    let Ok(origin) = std::fs::read_to_string(source_note(stable)) else { return Ok(false) };
+    let source = PathBuf::from(origin.trim());
+    let preview = match stable.extension().and_then(|e| e.to_str()) {
+        Some("svg") => Preview::Svg,
+        Some("pdf") => Preview::Pdf,
+        _ => Preview::Png,
+    };
+    let before = std::fs::metadata(stable).and_then(|m| m.modified()).ok();
+    render_stable(&source, preview)?;
+    Ok(std::fs::metadata(stable).and_then(|m| m.modified()).ok() != before)
 }
 
 /// The drawing of `source`'s current version as `preview`, if it was made already: nothing is run,
@@ -321,5 +347,12 @@ mod stable_tests {
         let second = render_stable(&dir.join("logo.oracle-vector"), Preview::Svg).unwrap();
         assert_eq!(first, second, "the same path");
         assert_ne!(std::fs::read_to_string(&second).unwrap(), before, "the new drawing");
+        // An app holding only the stable path brings it up to date.
+        std::thread::sleep(Duration::from_millis(30));
+        save(120);
+        assert!(refresh_stable(&first).unwrap(), "redrawn");
+        assert!(!refresh_stable(&first).unwrap(), "nothing to do the second time");
+        assert!(std::fs::read_to_string(&first).unwrap().contains("120"));
+        assert!(!refresh_stable(&dir.join("in.svg")).unwrap(), "another file: nothing to do");
     }
 }
