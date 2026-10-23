@@ -74,12 +74,18 @@ fn source_note(stable: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// The document a stable drawing ([`render_stable`]) was made from: what Edit Original opens, in its
+/// app, from a program that only knows the drawing. `None` for any other file.
+pub fn stable_source(stable: &Path) -> Option<PathBuf> {
+    let origin = std::fs::read_to_string(source_note(stable)).ok()?;
+    Some(PathBuf::from(origin.trim())).filter(|p| !p.as_os_str().is_empty())
+}
+
 /// Draws again a stable drawing ([`render_stable`]) whose document changed since: an app that keeps
 /// the drawing's path calls it before looking whether its files changed. `Ok(false)` for any other
 /// file, or a document unchanged (nothing is run: the drawing of its current version is cached).
 pub fn refresh_stable(stable: &Path) -> Result<bool, String> {
-    let Ok(origin) = std::fs::read_to_string(source_note(stable)) else { return Ok(false) };
-    let source = PathBuf::from(origin.trim());
+    let Some(source) = stable_source(stable) else { return Ok(false) };
     let preview = match stable.extension().and_then(|e| e.to_str()) {
         Some("svg") => Preview::Svg,
         Some("pdf") => Preview::Pdf,
@@ -354,5 +360,7 @@ mod stable_tests {
         assert!(!refresh_stable(&first).unwrap(), "nothing to do the second time");
         assert!(std::fs::read_to_string(&first).unwrap().contains("120"));
         assert!(!refresh_stable(&dir.join("in.svg")).unwrap(), "another file: nothing to do");
+        assert_eq!(stable_source(&first), Some(std::path::absolute(dir.join("logo.oracle-vector")).unwrap()));
+        assert_eq!(stable_source(&dir.join("in.svg")), None);
     }
 }
