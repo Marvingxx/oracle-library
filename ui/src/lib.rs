@@ -3,7 +3,8 @@
 //! Oracle apps. The browser never touches the OS itself: what it can't do in egui (choose a folder,
 //! start a native drag, open a file in an app) it asks for through [`Request`]s the host carries out.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// No panics in shipped code; tests may unwrap.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod in_app;
 mod thumbs;
@@ -85,6 +86,8 @@ pub struct LibraryBrowser {
     thumbs: Thumbs,
     requests: Vec<Request>,
     status: Option<(String, Instant)>,
+    /// A file just added: selected once the index has it.
+    select_after: Option<PathBuf>,
 }
 
 impl Default for LibraryBrowser {
@@ -120,6 +123,7 @@ impl LibraryBrowser {
             thumbs: Thumbs::new(),
             requests: Vec::new(),
             status: None,
+            select_after: None,
         };
         b.reload();
         b
@@ -187,6 +191,38 @@ impl LibraryBrowser {
         }
     }
 
+    /// Adds `files` to the library (copied into its "Mes créations" folder, see
+    /// [`oracle_library::ingest`]), indexes it again and selects the first one. Returns where they
+    /// are now; the browser says what happened either way.
+    pub fn add_files(&mut self, files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+        let Some(root) = self.user.library_root() else {
+            let e = self.tr("Choisissez d'abord le dossier de la bibliothèque", "Choose the library folder first").to_string();
+            self.say(e.clone());
+            return Err(e);
+        };
+        let result = oracle_library::ingest::add(&root, files);
+        match &result {
+            Ok(added) if !added.is_empty() => {
+                let n = added.len();
+                let said = if self.french {
+                    if n == 1 { format!("Ajouté à « {} »", oracle_library::ingest::OWN_FOLDER) } else { format!("{n} fichiers ajoutés à « {} »", oracle_library::ingest::OWN_FOLDER) }
+                } else if n == 1 {
+                    format!("Added to “{}”", oracle_library::ingest::OWN_FOLDER)
+                } else {
+                    format!("{n} files added to “{}”", oracle_library::ingest::OWN_FOLDER)
+                };
+                self.select_after = added.first().cloned();
+                self.shelf = Shelf::All;
+                self.query = Query::default();
+                self.reload();
+                self.say(said);
+            }
+            Ok(_) => {}
+            Err(e) => self.say(e.clone()),
+        }
+        result
+    }
+
     /// Shows a short message in the browser's status line.
     pub fn say(&mut self, text: impl Into<String>) {
         self.status = Some((text.into(), Instant::now()));
@@ -223,7 +259,15 @@ impl LibraryBrowser {
         }
         if let State::Loading(rx) = &self.state {
             match rx.try_recv() {
-                Ok(Ok(lib)) => self.state = State::Ready(Arc::new(lib)),
+                Ok(Ok(lib)) => {
+                    // A file just added: selected, so the user sees it arrive.
+                    if let Some(file) = self.select_after.take()
+                        && let Some(a) = lib.assets.iter().find(|a| a.file(&lib.root) == file)
+                    {
+                        self.selected = Some(a.id.clone());
+                    }
+                    self.state = State::Ready(Arc::new(lib));
+                }
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.state = State::Failed("indexation interrompue".into()),

@@ -6,6 +6,7 @@
 
 pub mod fold;
 pub mod index;
+pub mod ingest;
 pub mod search;
 pub mod user;
 

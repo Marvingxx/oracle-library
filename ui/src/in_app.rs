@@ -34,6 +34,31 @@ impl InAppLibrary {
         self.open = !self.open;
     }
 
+    /// Files dropped on the library window go into the library rather than onto the document. Call
+    /// from `eframe::App::raw_input_hook`, before the app looks at `dropped_files`, with the
+    /// pointer's position at the drop (`None` when unknown: the drop is left to the app). Returns
+    /// whether the drop was taken.
+    pub fn claim_drops(&mut self, raw: &mut egui::RawInput, at: Option<egui::Pos2>) -> bool {
+        let over = match (at, self.window_rect) {
+            (Some(p), Some(r)) => self.open && r.contains(p),
+            _ => false,
+        };
+        if !over || raw.dropped_files.is_empty() {
+            return false;
+        }
+        let files: Vec<PathBuf> = raw.dropped_files.drain(..).map(|f| f.path().to_path_buf()).filter(|p| p.is_absolute()).collect();
+        self.add_files(&files);
+        true
+    }
+
+    /// Adds `files` to the library (its "Mes créations" folder) and shows them: what an app's
+    /// File › Add to Library sends. Opens the window.
+    pub fn add_files(&mut self, files: &[PathBuf]) {
+        self.open = true;
+        let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
+        let _ = browser.add_files(files); // The browser says what happened.
+    }
+
     /// Adds the files dropped from the library to this frame's input. Call from
     /// `eframe::App::raw_input_hook`.
     pub fn inject_drops(&mut self, raw: &mut egui::RawInput) {
