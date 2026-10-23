@@ -131,7 +131,10 @@ mod tests {
     use crate::index::Library;
 
     fn lib() -> Library {
-        let dir = std::env::temp_dir().join(format!("oracle-library-test-{}", std::process::id()));
+        // One folder per call: the tests run in parallel and each rebuilds its library.
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("oracle-library-test-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for f in [
             "01_Textures photo/Metal/Metal_1.jpg",
