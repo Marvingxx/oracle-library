@@ -47,14 +47,15 @@ pub fn render(source: &Path, preview: Preview) -> Result<Rendered, String> {
 }
 
 /// `source` drawn as `preview`, at a path that stays the same from one version of the file to the
-/// next (`renders/live/<name>-<key>.<ext>`), rewritten when the drawing changes: for an app that keeps
-/// a path to the drawing (a footage item in Oracle Motion) rather than asking again each time.
+/// next (`renders/live/<key>/<name>.<ext>`: the document's own name, which an app shows), rewritten
+/// when the drawing changes: for an app that keeps a path to the drawing (a footage item in Oracle
+/// Motion) rather than asking again each time.
 pub fn render_stable(source: &Path, preview: Preview) -> Result<PathBuf, String> {
     let drawn = render(source, preview)?;
-    let dir = cache_dir().ok_or("dossier de cache introuvable")?.join("live");
+    let dir = cache_dir().ok_or("dossier de cache introuvable")?.join("live").join(format!("{:016x}", source_key(source)));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{} : {e}", dir.display()))?;
     let stem = source.file_stem().map_or_else(|| "document".to_string(), |s| s.to_string_lossy().into_owned());
-    let stable = dir.join(format!("{stem}-{:016x}.{}", source_key(source), preview.ext()));
+    let stable = dir.join(format!("{stem}.{}", preview.ext()));
     let fresh = std::fs::read(&drawn.path).map_err(|e| format!("{} : {e}", drawn.path.display()))?;
     if std::fs::read(&stable).ok().as_deref() != Some(fresh.as_slice()) {
         let part = dir.join(format!("part-{}-{}.{}", std::process::id(), unique(), preview.ext()));
@@ -352,6 +353,7 @@ mod stable_tests {
         save(80);
         let second = render_stable(&dir.join("logo.oracle-vector"), Preview::Svg).unwrap();
         assert_eq!(first, second, "the same path");
+        assert_eq!(first.file_name().and_then(|n| n.to_str()), Some("logo.svg"), "the document's own name");
         assert_ne!(std::fs::read_to_string(&second).unwrap(), before, "the new drawing");
         // An app holding only the stable path brings it up to date.
         std::thread::sleep(Duration::from_millis(30));
