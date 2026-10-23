@@ -14,13 +14,14 @@ pub enum App {
     Edit,
     Vector,
     Guide,
+    Motion,
     BrandKit,
     MockupStudio,
     Suite,
 }
 
 impl App {
-    pub const ALL: [App; 6] = [App::Edit, App::Vector, App::Guide, App::BrandKit, App::MockupStudio, App::Suite];
+    pub const ALL: [App; 7] = [App::Edit, App::Vector, App::Guide, App::Motion, App::BrandKit, App::MockupStudio, App::Suite];
 
     /// The app's id, as the launcher's catalog names it.
     pub fn id(self) -> &'static str {
@@ -28,6 +29,7 @@ impl App {
             App::Edit => "oracle-edit",
             App::Vector => "oracle-vector",
             App::Guide => "oracle-guide",
+            App::Motion => "oracle-motion",
             App::BrandKit => "oracle-brand-kit",
             App::MockupStudio => "oracle-mockup-studio",
             App::Suite => "oracle-suite",
@@ -40,6 +42,7 @@ impl App {
             App::Edit => "Oracle Edit",
             App::Vector => "Oracle Vector",
             App::Guide => "Oracle Brand Guide",
+            App::Motion => "Oracle Motion",
             App::BrandKit => "Oracle Brand Kit",
             App::MockupStudio => "Oracle Mockup Studio",
             App::Suite => "Oracle Suite",
@@ -57,6 +60,7 @@ impl App {
             App::Edit => "oracle-edit",
             App::Vector => "oracle-vector",
             App::Guide => "oracle-guide",
+            App::Motion => "oracle-motion",
             App::BrandKit | App::MockupStudio => "oracle-brand",
             App::Suite => "oracle-launcher",
         }
@@ -68,6 +72,7 @@ impl App {
             App::Edit => Some("oracle-edit-cli"),
             App::Vector => Some("oracle-vector-cli"),
             App::Guide => Some("oracle-guide-cli"),
+            App::Motion => Some("oracle-motion-cli"),
             App::BrandKit => Some("oracle-brand"),
             App::MockupStudio | App::Suite => None,
         }
