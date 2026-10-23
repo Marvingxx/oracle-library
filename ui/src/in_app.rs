@@ -23,11 +23,14 @@ pub struct InAppLibrary {
     /// Files to drop on the document at the next frame.
     drops: Vec<PathBuf>,
     window_rect: Option<egui::Rect>,
+    /// The app window's client origin (points) and points-to-pixels scale, as of the last frame:
+    /// to read the pointer from the OS at a drop.
+    client: Option<(egui::Pos2, f32)>,
 }
 
 impl InAppLibrary {
     pub fn new(app_id: &'static str) -> InAppLibrary {
-        InAppLibrary { open: false, app_id, browser: None, dragging: None, drops: Vec::new(), window_rect: None }
+        InAppLibrary { open: false, app_id, browser: None, dragging: None, drops: Vec::new(), window_rect: None, client: None }
     }
 
     pub fn toggle(&mut self) {
@@ -36,9 +39,13 @@ impl InAppLibrary {
 
     /// Files dropped on the library window go into the library rather than onto the document. Call
     /// from `eframe::App::raw_input_hook`, before the app looks at `dropped_files`, with the
-    /// pointer's position at the drop (`None` when unknown: the drop is left to the app). Returns
-    /// whether the drop was taken.
+    /// pointer's position at the drop if the app knows it (`None`: it is read from the OS where it
+    /// can be; unknown, the drop is left to the app). Returns whether the drop was taken.
     pub fn claim_drops(&mut self, raw: &mut egui::RawInput, at: Option<egui::Pos2>) -> bool {
+        if raw.dropped_files.is_empty() || !self.open {
+            return false;
+        }
+        let at = at.or_else(|| self.os_pointer());
         let over = match (at, self.window_rect) {
             (Some(p), Some(r)) => self.open && r.contains(p),
             _ => false,
@@ -49,6 +56,21 @@ impl InAppLibrary {
         let files: Vec<PathBuf> = raw.dropped_files.drain(..).map(|f| f.path().to_path_buf()).filter(|p| p.is_absolute()).collect();
         self.add_files(&files);
         true
+    }
+
+    /// The pointer in points of the app window, read from the OS (winit's file drops carry no
+    /// position, and during an OS drag the window gets no pointer events).
+    #[cfg(windows)]
+    fn os_pointer(&self) -> Option<egui::Pos2> {
+        let (origin, ppp) = self.client?;
+        let pt = winsafe::GetCursorPos().ok()?;
+        // Both in physical pixels: the client origin is egui's points times the scale.
+        Some(((egui::pos2(pt.x as f32, pt.y as f32) - origin * ppp) / ppp).to_pos2())
+    }
+
+    #[cfg(not(windows))]
+    fn os_pointer(&self) -> Option<egui::Pos2> {
+        None
     }
 
     /// Adds `files` to the library (its "Mes créations" folder) and shows them: what an app's
@@ -70,6 +92,7 @@ impl InAppLibrary {
     /// Draws the window (when open) and the drag in progress. Call once per frame. `french`
     /// picks the interface language.
     pub fn ui(&mut self, ctx: &egui::Context, french: bool) {
+        self.client = ctx.input(|i| i.viewport().inner_rect).map(|r| (r.min, ctx.pixels_per_point()));
         self.follow_drag(ctx);
         if !self.open {
             self.window_rect = None;
