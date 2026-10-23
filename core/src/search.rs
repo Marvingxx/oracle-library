@@ -39,6 +39,7 @@ fn group_hint(term: &Term) -> Option<FormatGroup> {
     for w in all {
         let g = match w.as_str() {
             "font" | "police" | "typo" | "typographie" | "typeface" => FormatGroup::Font,
+            "oracle" => FormatGroup::Oracle,
             "vector" | "vecteur" | "vectoriel" | "svg" => FormatGroup::Vector,
             "brush" | "pinceau" | "abr" | "psd" => FormatGroup::Photoshop,
             "photo" | "image" | "jpg" | "png" => FormatGroup::Image,
@@ -84,7 +85,7 @@ pub fn search(library: &Library, user: &UserData, q: &Query) -> Vec<usize> {
         }
     }
     // Stable: equal scores keep folder order.
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
     scored.into_iter().map(|(_, i)| i).collect()
 }
 
@@ -95,9 +96,8 @@ fn score(a: &Asset, own_tags: &[String], terms: &[Term]) -> Option<u32> {
     let own: Vec<String> = own_tags.iter().flat_map(|t| words(t)).collect();
     let mut total = 0;
     for t in terms {
-        let s = if hit(t, &a.name_words) {
-            3
-        } else if hit(t, &own) {
+        // The name and the user's own tags rank first.
+        let s = if hit(t, &a.name_words) || hit(t, &own) {
             3
         } else if hit(t, &a.tags) {
             2

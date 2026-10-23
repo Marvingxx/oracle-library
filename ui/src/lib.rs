@@ -39,6 +39,10 @@ pub enum Request {
 
 /// Which Oracle app suits a file best.
 pub fn app_for(asset: &Asset) -> Option<(&'static str, &'static str)> {
+    // An Oracle document: the app that made it.
+    if let Some(format) = oracle_suite_link::oracle_format(std::path::Path::new(&asset.path)) {
+        return Some((format.app.id(), format.app.name()));
+    }
     match asset.group {
         FormatGroup::Image | FormatGroup::Photoshop => Some(("oracle-edit", "Oracle Edit")),
         FormatGroup::Vector => Some(("oracle-vector", "Oracle Vector")),
@@ -362,8 +366,9 @@ impl LibraryBrowser {
         ui.add_space(8.0);
         // Format chips.
         ui.horizontal_wrapped(|ui| {
-            let groups: [(Option<FormatGroup>, &str, &str); 8] = [
+            let groups: [(Option<FormatGroup>, &str, &str); 9] = [
                 (None, "Tout", "All"),
+                (Some(FormatGroup::Oracle), "Fichiers Oracle", "Oracle files"),
                 (Some(FormatGroup::Image), "Images", "Images"),
                 (Some(FormatGroup::Vector), "Vecteurs", "Vectors"),
                 (Some(FormatGroup::Font), "Polices", "Fonts"),

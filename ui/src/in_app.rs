@@ -168,21 +168,7 @@ impl egui::DroppedFile for LibraryDrop {
 
 /// Another Oracle app's program, where its installer puts it (`C:\Program Files\Oracle Vector`).
 fn other_app_exe(app: &str) -> Option<PathBuf> {
-    let name = match app {
-        "oracle-edit" => "Oracle Edit",
-        "oracle-vector" => "Oracle Vector",
-        _ => return None,
-    };
-    let roots = ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"].iter().filter_map(std::env::var_os).map(PathBuf::from);
-    for root in roots {
-        for dir in [root.join(name), root.join("Programs").join(name)] {
-            let exe = dir.join(format!("{app}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
-        }
-    }
-    None
+    oracle_suite_link::App::from_id(app)?.exe()
 }
 
 fn open_with_system(file: &Path) -> Result<(), String> {

@@ -172,7 +172,15 @@ fn make(job: &Job, cache_dir: Option<&Path>) -> Option<ColorImage> {
         return None;
     }
     let ext = job.source.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let rgba = if ext == "svg" || ext == "svgz" { render_svg(&job.source)? } else { image::open(&job.source).ok()?.thumbnail(SIZE, SIZE).to_rgba8() };
+    let rgba = if ext == "svg" || ext == "svgz" {
+        render_svg(&job.source)?
+    } else if oracle_suite_link::oracle_format(&job.source).is_some() {
+        // An Oracle document, drawn by the app that made it (cached by oracle-suite-link too).
+        let drawn = oracle_suite_link::render(&job.source, oracle_suite_link::Preview::Png).map_err(|e| log::info!("{e}")).ok()?;
+        image::open(&drawn.path).ok()?.thumbnail(SIZE, SIZE).to_rgba8()
+    } else {
+        image::open(&job.source).ok()?.thumbnail(SIZE, SIZE).to_rgba8()
+    };
     if let Some(c) = cached {
         if let Some(dir) = c.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -204,4 +212,28 @@ fn render_svg(path: &Path) -> Option<image::RgbaImage> {
 fn to_color_image(rgba: image::RgbaImage) -> ColorImage {
     let size = [rgba.width() as usize, rgba.height() as usize];
     ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An Oracle Vector document gets its thumbnail from Oracle Vector (when this suite's build or
+    /// the installed app is there): the red of the drawing, not a format badge.
+    #[test]
+    fn an_oracle_vector_document_is_drawn_by_oracle_vector() {
+        let Some(cli) = oracle_suite_link::App::Vector.cli() else { return };
+        let dir = std::env::temp_dir().join(format!("oracle-thumbs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let svg = dir.join("logo.svg");
+        std::fs::write(&svg, r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="#d31c3b"/></svg>"##).unwrap();
+        let doc = dir.join("logo.oracle-vector");
+        assert!(std::process::Command::new(cli).arg("convert").arg(&svg).arg(&doc).status().unwrap().success());
+        let image = make(&Job { key: "k".into(), source: doc, cache: false }, None).expect("a thumbnail");
+        let [w, h] = image.size;
+        assert!(w > h, "the logo's proportions: {w}×{h}");
+        let centre = image.pixels[(h / 2) * w + w / 2];
+        assert!(centre.r() > 180 && centre.g() < 80, "Oracle red in the middle: {centre:?}");
+    }
 }

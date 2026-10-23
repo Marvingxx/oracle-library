@@ -1,0 +1,10 @@
+[package]
+name = "oracle-suite-link"
+description = "What ties the Oracle apps together: which apps are installed, Oracle's file formats, and each format drawn by the app that made it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dirs = "6"
+log = { workspace = true }

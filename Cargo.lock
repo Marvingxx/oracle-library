@@ -1836,8 +1836,17 @@ dependencies = [
  "image",
  "log",
  "oracle-library",
+ "oracle-suite-link",
  "resvg",
  "rfd",
+]
+
+[[package]]
+name = "oracle-suite-link"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "log",
 ]
 
 [[package]]

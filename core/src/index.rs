@@ -23,6 +23,8 @@ const MAX_DEPTH: usize = 24;
 /// What kind of file an asset is, for the format filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FormatGroup {
+    /// Documents of the Oracle apps (`.oracle-vector`, `.pcraft`, `.oracle-guide`).
+    Oracle,
     Image,
     Vector,
     Font,
@@ -33,12 +35,13 @@ pub enum FormatGroup {
 }
 
 impl FormatGroup {
-    pub const ALL: [FormatGroup; 7] =
-        [FormatGroup::Image, FormatGroup::Vector, FormatGroup::Font, FormatGroup::Photoshop, FormatGroup::Layout, FormatGroup::Video, FormatGroup::Other];
+    pub const ALL: [FormatGroup; 8] =
+        [FormatGroup::Oracle, FormatGroup::Image, FormatGroup::Vector, FormatGroup::Font, FormatGroup::Photoshop, FormatGroup::Layout, FormatGroup::Video, FormatGroup::Other];
 
     /// The group of a file extension (any case, without the dot).
     pub fn of(ext: &str) -> FormatGroup {
         match ext.to_ascii_lowercase().as_str() {
+            "oracle-vector" | "pcraft" | "oracle-guide" => FormatGroup::Oracle,
             "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic" | "avif" | "exr" | "hdr" | "tga" => FormatGroup::Image,
             "svg" | "svgz" | "ai" | "eps" | "pdf" | "emf" | "wmf" | "dxf" => FormatGroup::Vector,
             "ttf" | "otf" | "woff" | "woff2" | "ttc" => FormatGroup::Font,

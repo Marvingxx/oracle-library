@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 oracle-library = { workspace = true }
+oracle-suite-link = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "webp", "bmp"] }

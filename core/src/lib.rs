@@ -1,7 +1,8 @@
 //! Oracle's asset library: indexes a folder of creative resources (textures, brushes, fonts,
 //! vectors, mockups…) and searches it in French and English, accents or not.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// No panics in shipped code; tests may unwrap.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod fold;
 pub mod index;
