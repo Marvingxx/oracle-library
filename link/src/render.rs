@@ -46,6 +46,24 @@ pub fn render(source: &Path, preview: Preview) -> Result<Rendered, String> {
     render_in(&dir, source, preview, format.app.cli())
 }
 
+/// `source` drawn as `preview`, at a path that stays the same from one version of the file to the
+/// next (`renders/live/<name>-<key>.<ext>`), rewritten when the drawing changes: for an app that keeps
+/// a path to the drawing (a footage item in Oracle Motion) rather than asking again each time.
+pub fn render_stable(source: &Path, preview: Preview) -> Result<PathBuf, String> {
+    let drawn = render(source, preview)?;
+    let dir = cache_dir().ok_or("dossier de cache introuvable")?.join("live");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{} : {e}", dir.display()))?;
+    let stem = source.file_stem().map_or_else(|| "document".to_string(), |s| s.to_string_lossy().into_owned());
+    let stable = dir.join(format!("{stem}-{:016x}.{}", source_key(source), preview.ext()));
+    let fresh = std::fs::read(&drawn.path).map_err(|e| format!("{} : {e}", drawn.path.display()))?;
+    if std::fs::read(&stable).ok().as_deref() != Some(fresh.as_slice()) {
+        let part = dir.join(format!("part-{}-{}.{}", std::process::id(), unique(), preview.ext()));
+        std::fs::write(&part, &fresh).map_err(|e| format!("{} : {e}", part.display()))?;
+        std::fs::rename(&part, &stable).map_err(|e| format!("{} : {e}", stable.display()))?;
+    }
+    Ok(stable)
+}
+
 /// The drawing of `source`'s current version as `preview`, if it was made already: nothing is run,
 /// so it is cheap enough to ask often (whether a placed copy is still current).
 pub fn cached(source: &Path, preview: Preview) -> Option<PathBuf> {
@@ -274,5 +292,34 @@ mod tests {
         let second = render_in(&cache, &src, Preview::Svg, Some(cli)).unwrap();
         assert_ne!(second.path, first.path);
         assert!(!first.path.exists(), "the older drawing is removed");
+    }
+}
+
+#[cfg(test)]
+mod stable_tests {
+    use super::*;
+
+    /// The stable drawing keeps its path from one version to the next, and follows the content.
+    #[test]
+    fn the_stable_drawing_keeps_its_path_and_follows_the_file() {
+        let Some(cli) = App::Vector.cli() else { return };
+        let dir = std::env::temp_dir().join(format!("oracle-link-stable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let save = |width: u32| {
+            let svg = dir.join("in.svg");
+            std::fs::write(&svg, format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="20"><rect width="{width}" height="20" fill="#d31c3b"/></svg>"##)).unwrap();
+            let mut c = Command::new(&cli);
+            c.arg("convert").arg(&svg).arg(dir.join("logo.oracle-vector"));
+            run(c).unwrap();
+        };
+        save(40);
+        let first = render_stable(&dir.join("logo.oracle-vector"), Preview::Svg).unwrap();
+        let before = std::fs::read_to_string(&first).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        save(80);
+        let second = render_stable(&dir.join("logo.oracle-vector"), Preview::Svg).unwrap();
+        assert_eq!(first, second, "the same path");
+        assert_ne!(std::fs::read_to_string(&second).unwrap(), before, "the new drawing");
     }
 }
