@@ -150,6 +150,16 @@ pub fn open_in_app(app: App, file: &Path) -> Result<(), String> {
     Command::new(&exe).arg(file).spawn().map(|_| ()).map_err(|e| format!("impossible de lancer {} : {e}", app.name()))
 }
 
+/// Edit Original for an Oracle document placed in another app: opens `file` in the app that made it
+/// (an `.oracle-vector` in Oracle Vector). Saving it there updates it where it is placed (the link
+/// watch). Returns that app; `Err` (French, for the interface) when `file` isn't an Oracle document
+/// or the app can't be started.
+pub fn edit_original(file: &Path) -> Result<App, String> {
+    let format = crate::oracle_format(file).ok_or_else(|| format!("{} n'est pas un document Oracle", file.display()))?;
+    open_in_app(format.app, file)?;
+    Ok(format.app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
