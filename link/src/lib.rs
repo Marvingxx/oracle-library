@@ -2,6 +2,7 @@
 //!
 //! - [`App`]: the Oracle apps, where each one is installed and its command-line engine;
 //! - [`OracleFormat`]: Oracle's own file formats and the app that makes each one;
+//! - [`inbox`]: asking another Oracle app to place or open a file (Send to), starting it if needed;
 //! - [`render`]: a native file drawn by the app that made it (an `.oracle-vector` logo as SVG by
 //!   Oracle Vector, a `.pcraft` as PNG by Oracle Edit), cached and redrawn when the file changes, so
 //!   any app can place it without an export step.
@@ -13,8 +14,9 @@
 
 mod apps;
 mod formats;
+pub mod inbox;
 mod render;
 
-pub use apps::{App, open_in_app};
+pub use apps::{App, edit_original, open_in_app};
 pub use formats::{OracleFormat, Preview, oracle_format};
-pub use render::{Rendered, cache_dir, cached, render};
+pub use render::{Rendered, cache_dir, cached, render, render_stable};

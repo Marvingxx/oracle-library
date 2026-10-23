@@ -74,11 +74,19 @@ impl InAppLibrary {
     }
 
     /// Adds `files` to the library (its "Mes créations" folder) and shows them: what an app's
-    /// File › Add to Library sends. Opens the window.
-    pub fn add_files(&mut self, files: &[PathBuf]) {
+    /// File › Add to Library sends. Opens the window. Returns where they are now in the library
+    /// (empty when they couldn't be added: the browser says why).
+    pub fn add_files(&mut self, files: &[PathBuf]) -> Vec<PathBuf> {
         self.open = true;
         let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
-        let _ = browser.add_files(files); // The browser says what happened.
+        browser.add_files(files).unwrap_or_default()
+    }
+
+    /// Like [`add_files`](Self::add_files) without opening the window: a document sent to another
+    /// app goes through the library quietly.
+    pub fn store_files(&mut self, files: &[PathBuf]) -> Vec<PathBuf> {
+        let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
+        browser.add_files(files).unwrap_or_default()
     }
 
     /// Adds the files dropped from the library to this frame's input. Call from
