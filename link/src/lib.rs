@@ -17,4 +17,4 @@ mod render;
 
 pub use apps::{App, open_in_app};
 pub use formats::{OracleFormat, Preview, oracle_format};
-pub use render::{Rendered, cache_dir, render};
+pub use render::{Rendered, cache_dir, cached, render};

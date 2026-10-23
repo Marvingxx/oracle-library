@@ -46,12 +46,25 @@ pub fn render(source: &Path, preview: Preview) -> Result<Rendered, String> {
     render_in(&dir, source, preview, format.app.cli())
 }
 
+/// The drawing of `source`'s current version as `preview`, if it was made already: nothing is run,
+/// so it is cheap enough to ask often (whether a placed copy is still current).
+pub fn cached(source: &Path, preview: Preview) -> Option<PathBuf> {
+    let path = cache_dir()?.join(cache_name(source, preview)?);
+    path.is_file().then_some(path)
+}
+
+/// The cache file name of `source`'s current version: its path's key, size and modification time.
+fn cache_name(source: &Path, preview: Preview) -> Option<String> {
+    let meta = std::fs::metadata(source).ok()?;
+    let stamp = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Some(format!("{:016x}-{:x}-{stamp:x}.{}", source_key(source), meta.len(), preview.ext()))
+}
+
 /// [`render`] with the cache folder and the owning app's engine given (tests).
 fn render_in(dir: &Path, source: &Path, preview: Preview, cli: Option<PathBuf>) -> Result<Rendered, String> {
-    let meta = std::fs::metadata(source).map_err(|e| format!("{} : {e}", source.display()))?;
-    let stamp = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    std::fs::metadata(source).map_err(|e| format!("{} : {e}", source.display()))?;
     let key = source_key(source);
-    let name = format!("{key:016x}-{:x}-{stamp:x}.{}", meta.len(), preview.ext());
+    let name = cache_name(source, preview).ok_or_else(|| format!("{} : illisible", source.display()))?;
     let target = dir.join(&name);
     if target.is_file() {
         return Ok(Rendered { path: target, preview, stale: false });
