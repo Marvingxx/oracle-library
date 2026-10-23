@@ -67,6 +67,40 @@ pub fn send(app: App, action: Action, file: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps `app` marked as running and wakes it when requests arrive, from a background thread: an
+/// idle app draws no frames, so it would otherwise be taken for closed (and started a second time)
+/// and answer only when next used. `wake` is called (egui's `request_repaint`) while requests are
+/// waiting; the app takes them ([`take`]) on the frame it then draws. Call once, at start-up: the
+/// thread lasts as long as the program.
+pub fn watch(app: App, wake: impl Fn() + Send + 'static) {
+    if let Some(dir) = inbox_dir(app) {
+        watch_in(dir, app.id(), wake);
+    }
+}
+
+fn watch_in(dir: PathBuf, id: &str, wake: impl Fn() + Send + 'static) {
+    let spawned = std::thread::Builder::new().name(format!("{id}-inbox")).spawn(move || {
+        loop {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join("alive"), b""); // Best effort, as in take_in.
+            if has_requests(&dir) {
+                wake();
+            }
+            std::thread::sleep(WATCH_EVERY);
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("{id}: inbox watch not started: {e}");
+    }
+}
+
+/// How often [`watch`] looks: well within [`ALIVE`].
+const WATCH_EVERY: Duration = Duration::from_millis(500);
+
+fn has_requests(dir: &Path) -> bool {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| e.path().extension().is_some_and(|x| x == "request"))
+}
+
 /// Whether `app` looked at its inbox in the last few seconds (it is running).
 pub fn is_running(app: App) -> bool {
     inbox_dir(app).is_some_and(|d| is_running_in(&d))
@@ -129,6 +163,26 @@ fn take_in(dir: &Path) -> Vec<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The watch marks the app running, and wakes it while a request waits.
+    #[test]
+    fn the_watch_keeps_the_app_alive_and_wakes_it_for_a_request() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = temp("watch");
+        let woken = Arc::new(AtomicUsize::new(0));
+        let count = woken.clone();
+        watch_in(dir.clone(), "test", move || {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(is_running_in(&dir));
+        assert_eq!(woken.load(Ordering::Relaxed), 0, "nothing to take");
+        send_in(&dir, Action::Place, Path::new("C:/logo.oracle-vector")).unwrap();
+        std::thread::sleep(WATCH_EVERY * 3);
+        assert!(woken.load(Ordering::Relaxed) > 0, "woken for the request");
+        assert_eq!(take_in(&dir).len(), 1);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("oracle-inbox-{name}-{}", std::process::id()));
