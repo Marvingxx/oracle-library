@@ -10,6 +10,6 @@ pub mod ingest;
 pub mod search;
 pub mod user;
 
-pub use index::{Asset, FormatGroup, Library};
+pub use index::{Asset, Collection, CollectionFile, FormatGroup, Library};
 pub use search::{Query, search};
 pub use user::UserData;

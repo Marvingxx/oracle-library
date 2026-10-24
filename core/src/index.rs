@@ -85,17 +85,20 @@ pub struct Asset {
     pub preview: Option<String>,
     /// Folded name words, matched first.
     pub(crate) name_words: Vec<String>,
+    /// A file of a collection outside the library folder (a brand's logo): `path` and `preview`
+    /// are then absolute, and the file is the collection's own, never a copy.
+    pub outside: bool,
 }
 
 impl Asset {
     /// The file on disk.
     pub fn file(&self, root: &Path) -> PathBuf {
-        resolve(root, &self.path)
+        if self.outside { PathBuf::from(&self.path) } else { resolve(root, &self.path) }
     }
 
     /// Its preview picture on disk, if the catalogue made one.
     pub fn preview_file(&self, root: &Path) -> Option<PathBuf> {
-        self.preview.as_deref().map(|p| resolve(root, p))
+        self.preview.as_deref().map(|p| if self.outside { PathBuf::from(p) } else { resolve(root, p) })
     }
 
     /// "6120 × 4080" when known.
@@ -128,6 +131,32 @@ pub struct Library {
     /// How many files the catalogue listed, and how many were found beyond it.
     pub from_catalogue: usize,
     pub found_since: usize,
+    /// Collections of files that live elsewhere (each brand of Oracle Brand Kit), after the
+    /// sections: their assets are in `assets` with [`Asset::outside`] set.
+    pub collections: Vec<Collection>,
+}
+
+/// A set of files outside the library folder shown as one section (a brand's logos and fonts).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Collection {
+    /// Its assets' [`Asset::kind`] (`Marque · Maison Été`), unique among sections and collections.
+    pub kind: String,
+    /// What the sidebar shows (`Maison Été`).
+    pub name: String,
+    pub count: usize,
+}
+
+/// One file of a [`Collection`].
+#[derive(Clone, Debug)]
+pub struct CollectionFile {
+    /// Stable id, unique in the library (`brand:<project>:<logo>`).
+    pub id: String,
+    pub name: String,
+    pub file: PathBuf,
+    /// Shown as the asset's category (`Logo principal`).
+    pub category: String,
+    /// Words to find it by, beyond its name and the collection's.
+    pub tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -216,7 +245,68 @@ impl Library {
             kinds: kinds.into_values().collect(),
             from_catalogue,
             found_since,
+            collections: Vec::new(),
         })
+    }
+
+    /// Adds a collection of files outside the library folder, named `name` in the sidebar, its
+    /// assets of kind `kind`. Files that don't exist (an unplugged drive) are left out; a kind
+    /// already used is replaced.
+    pub fn add_collection(&mut self, kind: &str, name: &str, files: Vec<CollectionFile>) {
+        self.remove_collection(kind);
+        let mut count = 0;
+        for f in files {
+            let Ok(meta) = std::fs::metadata(&f.file) else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let path = f.file.display().to_string();
+            let ext = f.file.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+            let group = FormatGroup::of(&ext);
+            let mut tags: Vec<String> = f.tags.iter().chain([&f.category, &name.to_string()]).flat_map(|t| words(t)).filter(|w| w.len() > 1).collect();
+            tags.sort();
+            tags.dedup();
+            let picture = group == FormatGroup::Image || ext.eq_ignore_ascii_case("svg");
+            self.assets.push(Asset {
+                id: f.id,
+                name_words: words(&f.name),
+                name: f.name,
+                preview: picture.then(|| path.clone()),
+                path,
+                format: ext.to_ascii_uppercase(),
+                group,
+                kind: kind.to_string(),
+                category: f.category,
+                bytes: meta.len(),
+                width: None,
+                height: None,
+                tags,
+                license: String::new(),
+                source: String::new(),
+                outside: true,
+            });
+            count += 1;
+        }
+        self.collections.push(Collection { kind: kind.to_string(), name: name.to_string(), count });
+    }
+
+    /// Takes the collection of kind `kind` (and its assets) out of the library.
+    pub fn remove_collection(&mut self, kind: &str) {
+        self.collections.retain(|c| c.kind != kind);
+        self.assets.retain(|a| !(a.outside && a.kind == kind));
+    }
+
+    /// The library without any collection: what the folder itself holds.
+    pub fn folder_only(&self) -> Library {
+        Library {
+            root: self.root.clone(),
+            library_id: self.library_id.clone(),
+            assets: self.assets.iter().filter(|a| !a.outside).cloned().collect(),
+            kinds: self.kinds.clone(),
+            from_catalogue: self.from_catalogue,
+            found_since: self.found_since,
+            collections: Vec::new(),
+        }
     }
 
     pub fn by_id(&self, id: &str) -> Option<&Asset> {
@@ -286,6 +376,7 @@ fn from_manifest(m: ManifestAsset) -> Asset {
         source: m.source,
         preview: m.preview,
         path: m.path,
+        outside: false,
     }
 }
 
@@ -318,6 +409,7 @@ fn from_path(rel: &str, bytes: u64) -> Asset {
         source: String::new(),
         // Small raster and vector files are their own preview.
         preview: matches!(group, FormatGroup::Image | FormatGroup::Vector).then(|| rel.to_string()).filter(|_| ext.eq_ignore_ascii_case("svg") || group == FormatGroup::Image),
+        outside: false,
     }
 }
 
@@ -349,6 +441,28 @@ mod tests {
         assert!(a.tags.contains(&"metal".to_string()) && a.tags.contains(&"texturelabs".to_string()));
         assert_eq!(a.name_words, ["rouille", "02"]);
         assert_eq!(a.preview.as_deref(), Some("01_Textures photo/Metal/Texturelabs - Metal/Rouille_02.jpg"));
+    }
+
+    #[test]
+    fn a_collection_lists_files_outside_the_folder_as_they_are() {
+        let dir = std::env::temp_dir().join(format!("oracle-collection-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib").join("metal.jpg"), "x").unwrap();
+        let logo = dir.join("Marque").join("logo.svg");
+        std::fs::create_dir_all(logo.parent().unwrap()).unwrap();
+        std::fs::write(&logo, "<svg/>").unwrap();
+        let mut lib = Library::open(&dir.join("lib")).unwrap();
+        let file = |id: &str, f: &Path| CollectionFile { id: id.into(), name: "Logo".into(), file: f.to_path_buf(), category: "Logo principal".into(), tags: vec!["logo".into()] };
+        lib.add_collection("Marque · Été", "Été", vec![file("b:1", &logo), file("b:2", &dir.join("absent.svg"))]);
+        assert_eq!(lib.collections, [Collection { kind: "Marque · Été".into(), name: "Été".into(), count: 1 }]);
+        let a = lib.by_id("b:1").unwrap();
+        assert_eq!(a.file(&lib.root), logo, "the brand's own file, not a copy");
+        assert_eq!(a.preview_file(&lib.root).as_deref(), Some(logo.as_path()));
+        assert!(a.tags.contains(&"ete".to_string()) && a.tags.contains(&"principal".to_string()));
+        assert_eq!(lib.folder_only().assets.len(), 1);
+        lib.add_collection("Marque · Été", "Été", Vec::new());
+        assert_eq!(lib.assets.len(), 1, "a collection added again replaces the old one");
     }
 
     #[test]

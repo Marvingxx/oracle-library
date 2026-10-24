@@ -15,7 +15,8 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
-use oracle_library::{Asset, FormatGroup, Library, Query, UserData, search};
+use oracle_library::{Asset, CollectionFile, FormatGroup, Library, Query, UserData, search};
+use oracle_suite_link::brands::{Brand, Registry};
 
 pub use in_app::InAppLibrary;
 pub use thumbs::Thumbs;
@@ -53,10 +54,17 @@ pub fn app_for(asset: &Asset) -> Option<(&'static str, &'static str)> {
 
 enum State {
     NoFolder,
-    Loading(Receiver<Result<Library, String>>),
+    Loading(Receiver<Result<Indexed, String>>),
     Ready(Arc<Library>),
     Failed(String),
 }
+
+/// What the indexing thread hands back: the library with its brand collections, each brand with its
+/// collection's kind, and the brand registry's stamp they were read at.
+type Indexed = (Library, Vec<(String, Brand)>, u64);
+
+/// How often the brands are looked at for a change (a few file times).
+const BRAND_CHECK: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shelf {
@@ -88,6 +96,12 @@ pub struct LibraryBrowser {
     status: Option<(String, Instant)>,
     /// A file just added: selected once the index has it.
     select_after: Option<PathBuf>,
+    /// The brands of Oracle Brand Kit, shown as collections (none without a settings file).
+    registry: Option<Registry>,
+    /// Each brand shown, with its collection's kind.
+    brands: Vec<(String, Brand)>,
+    brand_stamp: u64,
+    brand_checked: Option<Instant>,
 }
 
 impl Default for LibraryBrowser {
@@ -105,6 +119,8 @@ impl LibraryBrowser {
     /// Like [`new`](Self::new), with the settings file at `user_path` (None: nothing is saved).
     pub fn with_settings(user_path: Option<PathBuf>) -> LibraryBrowser {
         let user = user_path.as_deref().map(UserData::load).unwrap_or_default();
+        // The brand registry sits beside the library settings (`%APPDATA%\Oracle\brands.json`).
+        let registry = user_path.as_deref().and_then(std::path::Path::parent).map(|d| Registry::at(d.join("brands.json")));
         let mut b = LibraryBrowser {
             french: true,
             accent: ORACLE_RED,
@@ -124,6 +140,10 @@ impl LibraryBrowser {
             requests: Vec::new(),
             status: None,
             select_after: None,
+            registry,
+            brands: Vec::new(),
+            brand_stamp: 0,
+            brand_checked: None,
         };
         b.reload();
         b
@@ -169,8 +189,15 @@ impl LibraryBrowser {
             return;
         };
         let (tx, rx) = channel();
+        let registry = self.registry.clone();
         let _ = std::thread::Builder::new().name("library-index".into()).spawn(move || {
-            let _ = tx.send(Library::open(&root));
+            // The stamp first: a brand changed while it is read is read again at the next check.
+            let stamp = registry.as_ref().map_or(0, Registry::stamp);
+            let brands = registry.as_ref().map(Registry::brands).unwrap_or_default();
+            let _ = tx.send(Library::open(&root).map(|mut lib| {
+                let shown = add_brands(&mut lib, brands);
+                (lib, shown, stamp)
+            }));
         });
         self.state = State::Loading(rx);
         self.results_for = None;
@@ -259,7 +286,10 @@ impl LibraryBrowser {
         }
         if let State::Loading(rx) = &self.state {
             match rx.try_recv() {
-                Ok(Ok(lib)) => {
+                Ok(Ok((lib, brands, stamp))) => {
+                    self.brands = brands;
+                    self.brand_stamp = stamp;
+                    self.brand_checked = Some(Instant::now());
                     // A file just added: selected, so the user sees it arrive.
                     if let Some(file) = self.select_after.take()
                         && let Some(a) = lib.assets.iter().find(|a| a.file(&lib.root) == file)
@@ -290,6 +320,7 @@ impl LibraryBrowser {
                 return;
             }
         };
+        let lib = self.follow_brands(lib);
         self.refresh_results(&lib);
 
         let sidebar_w = 240.0;
@@ -307,6 +338,86 @@ impl LibraryBrowser {
             ui.scope_builder(egui::UiBuilder::new().max_rect(details), |ui| self.details(ui, &lib));
         }
         ui.allocate_rect(full, Sense::hover());
+    }
+
+    /// Every [`BRAND_CHECK`], the brands are looked at; when one changed in Brand Kit (a logo, a
+    /// colour, a new brand), its collection is read again, without indexing the folder again.
+    fn follow_brands(&mut self, lib: Arc<Library>) -> Arc<Library> {
+        let Some(registry) = &self.registry else { return lib };
+        if self.brand_checked.is_some_and(|t| t.elapsed() < BRAND_CHECK) {
+            return lib;
+        }
+        self.brand_checked = Some(Instant::now());
+        let stamp = registry.stamp();
+        if stamp == self.brand_stamp {
+            return lib;
+        }
+        self.brand_stamp = stamp;
+        let mut fresh = lib.folder_only();
+        self.brands = add_brands(&mut fresh, registry.brands());
+        let fresh = Arc::new(fresh);
+        self.state = State::Ready(fresh.clone());
+        self.results_for = None;
+        fresh
+    }
+
+    /// The brand whose collection is shown, if one is.
+    fn brand_shown(&self) -> Option<&Brand> {
+        let kind = self.query.kind.as_deref()?;
+        self.brands.iter().find(|(k, _)| k == kind).map(|(_, b)| b)
+    }
+
+    /// Above the grid of a brand's collection: its palette (a click copies the colour) and the
+    /// way back to Brand Kit.
+    fn palette(&mut self, ui: &mut Ui) {
+        let Some(brand) = self.brand_shown().cloned() else { return };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&brand.name).strong());
+            let families: Vec<&str> = brand.fonts.iter().map(|f| f.family.as_str()).filter(|f| !f.is_empty()).collect();
+            if !families.is_empty() {
+                ui.label(RichText::new(families.join(" · ")).weak());
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button(self.tr("Ouvrir dans Oracle Brand Kit", "Open in Oracle Brand Kit")).clicked() {
+                    self.requests.push(Request::OpenWith { app: "oracle-brand-kit", file: brand.dir.clone() });
+                }
+            });
+        });
+        if brand.colors.is_empty() {
+            ui.label(RichText::new(self.tr("Pas encore de couleurs dans cette marque.", "No colours in this brand yet.")).small().weak());
+            ui.add_space(6.0);
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+            for c in &brand.colors {
+                let (rect, resp) = ui.allocate_exact_size(vec2(112.0, 30.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} {}", c.name, c.hex)));
+                let fill = Color32::from_rgb(c.rgb[0], c.rgb[1], c.rgb[2]);
+                let chip = Rect::from_min_size(rect.min, vec2(30.0, 30.0));
+                ui.painter().rect_filled(chip, CornerRadius::same(4), fill);
+                ui.painter().rect_stroke(chip, CornerRadius::same(4), ui.visuals().widgets.noninteractive.bg_stroke, StrokeKind::Inside);
+                let text = ui.visuals().text_color();
+                let clip = Rect::from_min_max(egui::pos2(chip.right() + 6.0, rect.top()), rect.max);
+                let painter = ui.painter().with_clip_rect(clip);
+                painter.text(egui::pos2(clip.left(), rect.top() + 2.0), egui::Align2::LEFT_TOP, &c.name, egui::FontId::proportional(11.5), text);
+                painter.text(egui::pos2(clip.left(), rect.bottom() - 2.0), egui::Align2::LEFT_BOTTOM, &c.hex, egui::FontId::monospace(10.0), ui.visuals().weak_text_color());
+                let mut tip = format!("{}\n{}", c.name, c.hex);
+                if let Some([cy, m, y, k]) = c.cmyk {
+                    tip.push_str(&format!("\n{} {cy:.0} {m:.0} {y:.0} {k:.0}", self.tr("CMJN", "CMYK")));
+                }
+                if !c.pantone.is_empty() {
+                    tip.push_str(&format!("\nPantone {}", c.pantone));
+                }
+                tip.push_str(&format!("\n{}", self.tr("Clic : copier la valeur", "Click: copy the value")));
+                if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    ui.ctx().copy_text(c.hex.clone());
+                    let said = if self.french { format!("{} copié", c.hex) } else { format!("{} copied", c.hex) };
+                    self.say(said);
+                }
+            }
+        });
+        ui.add_space(8.0);
     }
 
     fn empty_state(&mut self, ui: &mut Ui, error: Option<String>) {
@@ -367,6 +478,18 @@ impl LibraryBrowser {
                 if side_item(ui, self.accent, kind, Some(*n), on).clicked() {
                     self.query.kind = if on { None } else { Some(kind.clone()) };
                     self.shelf = Shelf::All;
+                }
+            }
+            if !lib.collections.is_empty() {
+                ui.add_space(12.0);
+                section_title(ui, self.tr("MARQUES", "BRANDS"));
+                for c in &lib.collections {
+                    let on = self.query.kind.as_deref() == Some(c.kind.as_str());
+                    let tip = self.tr("Logos et typographies de la marque (Oracle Brand Kit), à leur place", "The brand's logos and type (Oracle Brand Kit), where they are");
+                    if side_item(ui, self.accent, &c.name, Some(c.count), on).on_hover_text(tip).clicked() {
+                        self.query.kind = if on { None } else { Some(c.kind.clone()) };
+                        self.shelf = Shelf::All;
+                    }
                 }
             }
             let tags = self.user.all_tags();
@@ -458,6 +581,7 @@ impl LibraryBrowser {
             });
         });
         ui.add_space(6.0);
+        self.palette(ui);
         self.grid(ui, lib);
     }
 
@@ -717,6 +841,49 @@ impl Drop for LibraryBrowser {
     }
 }
 
+/// Adds each brand to `lib` as a collection: its logo masters and font files, where they are.
+/// Returns each brand with its collection's kind.
+fn add_brands(lib: &mut Library, brands: Vec<Brand>) -> Vec<(String, Brand)> {
+    let mut shown: Vec<(String, Brand)> = Vec::new();
+    for b in brands {
+        let mut name = if b.name.trim().is_empty() { "Marque".to_string() } else { b.name.clone() };
+        // Two brands of the same name stay apart.
+        let base = name.clone();
+        let mut n = 2;
+        while shown.iter().any(|(k, _)| k == &format!("Marque · {name}")) || lib.kinds.iter().any(|(k, _)| k == &format!("Marque · {name}")) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        let kind = format!("Marque · {name}");
+        let mut files: Vec<CollectionFile> = b
+            .logos
+            .iter()
+            .map(|l| CollectionFile {
+                id: format!("brand:{}:{}", b.id, l.id),
+                name: l.label.clone(),
+                file: l.file.clone(),
+                category: l.role.clone(),
+                tags: vec![l.variant.clone(), "logo".into(), "marque".into(), "brand".into()],
+            })
+            .collect();
+        for f in &b.fonts {
+            for (i, file) in f.files.iter().enumerate() {
+                let stem = file.file_stem().map_or_else(|| f.family.clone(), |s| s.to_string_lossy().into_owned());
+                files.push(CollectionFile {
+                    id: format!("brand:{}:{}:{i}", b.id, f.id),
+                    name: stem,
+                    file: file.clone(),
+                    category: "Typographie".into(),
+                    tags: vec![f.family.clone(), f.usage.clone(), "police".into(), "marque".into()],
+                });
+            }
+        }
+        lib.add_collection(&kind, &name, files);
+        shown.push((kind, b));
+    }
+    shown
+}
+
 /// The picture to show for `asset`: the catalogue's preview, or the file itself for images and
 /// SVGs (decoded, then cached on disk). The flag says whether it is an original.
 fn thumb_source(lib: &Library, asset: &Asset) -> (Option<PathBuf>, bool) {
@@ -772,6 +939,8 @@ fn section_title(ui: &mut Ui, text: &str) {
 fn side_item(ui: &mut Ui, accent: Color32, label: &str, count: Option<usize>, on: bool) -> egui::Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+    // Drawn by hand: named for screen readers (and tests) as the button it is.
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
     let v = ui.visuals();
     if on {
         ui.painter().rect_filled(rect, CornerRadius::same(4), accent);

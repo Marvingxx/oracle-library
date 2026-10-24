@@ -1,5 +1,6 @@
 //! What ties the Oracle apps together, shared by all of them (they already share the library):
 //!
+//! - [`brands`]: the brands of Oracle Brand Kit (logos, palette, type), for every app;
 //! - [`App`]: the Oracle apps, where each one is installed and its command-line engine;
 //! - [`OracleFormat`]: Oracle's own file formats and the app that makes each one;
 //! - [`inbox`]: asking another Oracle app to place or open a file (Send to), starting it if needed;
@@ -13,6 +14,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod apps;
+pub mod brands;
 mod formats;
 pub mod inbox;
 mod render;
