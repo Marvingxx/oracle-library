@@ -5,7 +5,7 @@
 //! - [`OracleFormat`]: Oracle's own file formats and the app that makes each one;
 //! - [`inbox`]: asking another Oracle app to place or open a file (Send to), starting it if needed;
 //! - [`render`]: a native file drawn by the app that made it (an `.oracle-vector` logo as SVG by
-//!   Oracle Vector, a `.pcraft` as PNG by Oracle Edit), cached and redrawn when the file changes, so
+//!   Oracle Vector, a `.oracle-edit` as PNG by Oracle Edit), cached and redrawn when the file changes, so
 //!   any app can place it without an export step.
 //!
 //! Nothing here needs a window: engines and command-line tools use it as well as interfaces.

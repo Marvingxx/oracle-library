@@ -41,7 +41,7 @@ pub struct OracleFormat {
 }
 
 /// Every Oracle format.
-pub const FORMATS: [OracleFormat; 3] = [
+pub const FORMATS: [OracleFormat; 4] = [
     OracleFormat {
         ext: "oracle-vector",
         app: App::Vector,
@@ -49,6 +49,8 @@ pub const FORMATS: [OracleFormat; 3] = [
         label_en: "Oracle Vector document",
         previews: &[Preview::Svg, Preview::Pdf, Preview::Png],
     },
+    OracleFormat { ext: "oracle-edit", app: App::Edit, label_fr: "Document Oracle Edit", label_en: "Oracle Edit document", previews: &[Preview::Png] },
+    // Oracle Edit documents saved before the Oracle rename.
     OracleFormat { ext: "pcraft", app: App::Edit, label_fr: "Document Oracle Edit", label_en: "Oracle Edit document", previews: &[Preview::Png] },
     OracleFormat {
         ext: "oracle-guide",
@@ -79,6 +81,7 @@ mod tests {
     #[test]
     fn formats_by_extension_any_case() {
         assert_eq!(oracle_format(Path::new("Logo.ORACLE-VECTOR")).map(|f| f.app), Some(App::Vector));
+        assert_eq!(oracle_format(Path::new("C:/a/b/photo.oracle-edit")).map(|f| f.app), Some(App::Edit));
         assert_eq!(oracle_format(Path::new("C:/a/b/photo.pcraft")).map(|f| f.app), Some(App::Edit));
         assert_eq!(oracle_format(Path::new("charte.oracle-guide")).map(|f| f.app), Some(App::Guide));
         assert_eq!(oracle_format(Path::new("logo.svg")), None);
