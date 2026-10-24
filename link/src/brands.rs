@@ -169,6 +169,28 @@ pub fn stamp() -> u64 {
     Registry::user().map(|r| r.stamp()).unwrap_or(0)
 }
 
+/// How often [`watch`] looks at the brands.
+const WATCH_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Calls `wake` from a background thread whenever a brand changes (the user's [`stamp`]): an idle
+/// app draws no frame, so this is what makes it look again. Start it once per app.
+pub fn watch(wake: impl Fn() + Send + 'static) {
+    let spawned = std::thread::Builder::new().name("oracle-brands".into()).spawn(move || {
+        let mut last = stamp();
+        loop {
+            std::thread::sleep(WATCH_EVERY);
+            let now = stamp();
+            if now != last {
+                last = now;
+                wake();
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("brand watch not started: {e}");
+    }
+}
+
 fn same_dir(a: &Path, b: &Path) -> bool {
     if cfg!(windows) { a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) } else { a == b }
 }
