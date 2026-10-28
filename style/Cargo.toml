@@ -1,0 +1,9 @@
+[package]
+name = "oracle-style"
+description = "Oracle's own look, shared by every app of the suite: the palette, the typefaces (Space Grotesk, JetBrains Mono) and the HUD marks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+egui = { version = "0.36", default-features = false }

@@ -108,7 +108,9 @@ pub fn cached(source: &Path, preview: Preview) -> Option<PathBuf> {
 fn cache_name(source: &Path, preview: Preview) -> Option<String> {
     let meta = std::fs::metadata(source).ok()?;
     let stamp = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-    Some(format!("{:016x}-{:x}-{stamp:x}.{}", source_key(source), meta.len(), preview.ext()))
+    // Older Guide PNGs used page 1 (the second page); redraw even an unchanged source.
+    let page = if preview == Preview::Png && oracle_format(source).is_some_and(|f| f.app == App::Layout) { "-page0" } else { "" };
+    Some(format!("{:016x}-{:x}-{stamp:x}{page}.{}", source_key(source), meta.len(), preview.ext()))
 }
 
 /// [`render`] with the cache folder and the owning app's engine given (tests).
@@ -158,10 +160,11 @@ fn draw(cli: &Path, source: &Path, preview: Preview, dir: &Path, target: &Path) 
     let part = dir.join(format!("part-{}-{}.{}", std::process::id(), unique(), preview.ext()));
     let mut cmd = Command::new(cli);
     match oracle_format(source).map(|f| f.app) {
-        Some(App::Guide) => {
+        Some(App::Layout) => {
             cmd.arg("run").arg("--in").arg(source);
             if preview == Preview::Png {
-                cmd.args(["--page", "1"]);
+                // Guide's CLI uses zero-based page indices.
+                cmd.args(["--page", "0"]);
             }
             cmd.arg("--export").arg(&part);
         }
@@ -297,6 +300,34 @@ mod tests {
         let bad = if cfg!(windows) { PathBuf::from(std::env::var("ComSpec").unwrap_or("cmd.exe".into())) } else { PathBuf::from("/bin/false") };
         let err = render_in(&dir, &src, Preview::Png, Some(bad)).unwrap_err();
         assert!(!err.is_empty());
+    }
+
+    /// Exercise the real Guide engine: a one-page document must render its first page.
+    #[test]
+    #[ignore = "requires ORACLE_GUIDE_CLI pointing to a built Guide engine"]
+    fn a_single_page_guide_renders_as_png() {
+        let cli = PathBuf::from(std::env::var_os("ORACLE_GUIDE_CLI").expect("ORACLE_GUIDE_CLI is required"));
+        let dir = temp("guide-first-page");
+        let source = dir.join("single.oracle-guide");
+        let mut create = Command::new(&cli);
+        create.args(["run", "--cmd", r#"file.new={"width":180,"height":120,"pages":1,"facingPages":false,"margins":0}"#]);
+        create.arg("--export").arg(&source);
+        run(create).unwrap();
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        // Simulate a cached second-page drawing from before the page-index correction.
+        let meta = std::fs::metadata(&source).unwrap();
+        let stamp = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let legacy = cache.join(format!("{:016x}-{:x}-{stamp:x}.png", source_key(&source), meta.len()));
+        std::fs::write(&legacy, b"old second-page drawing").unwrap();
+        let result = render_in(&cache, &source, Preview::Png, Some(cli)).unwrap();
+        assert!(!result.stale);
+        assert!(!legacy.exists(), "the old page-index cache must be replaced");
+        let png = std::fs::read(result.path).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(u32::from_be_bytes(png[16..20].try_into().unwrap()) > 0);
+        assert!(u32::from_be_bytes(png[20..24].try_into().unwrap()) > 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The real engines, when this suite's builds are there: an `.oracle-vector` drawn as SVG and

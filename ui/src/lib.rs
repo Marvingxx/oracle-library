@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod in_app;
+mod dock;
 mod thumbs;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use oracle_library::{Asset, CollectionFile, FormatGroup, Library, Query, UserDat
 use oracle_suite_link::brands::{Brand, Registry};
 
 pub use in_app::InAppLibrary;
+pub use dock::{LibraryDock, LibraryPanel};
 pub use thumbs::Thumbs;
 
 /// Oracle's brand red, #d31c3b.
@@ -323,6 +325,19 @@ impl LibraryBrowser {
         let lib = self.follow_brands(lib);
         self.refresh_results(&lib);
 
+        // A dock shows the same resources without squeezing the grid between two side panes.
+        if ui.available_width() < 640.0 {
+            ui.horizontal(|ui| {
+                if ui.small_button(self.tr("Dossier…", "Folder…")).clicked() {
+                    self.requests.push(Request::PickFolder);
+                }
+                if ui.small_button(self.tr("Actualiser", "Refresh")).clicked() {
+                    self.reload();
+                }
+            });
+            self.main(ui, &lib);
+            return;
+        }
         let sidebar_w = 240.0;
         let details_w = if self.selected.is_some() { 300.0 } else { 0.0 };
         let full = ui.available_rect_before_wrap();
@@ -531,8 +546,10 @@ impl LibraryBrowser {
             }
         });
         ui.add_space(8.0);
-        // Format chips.
-        ui.horizontal_wrapped(|ui| {
+        // Short dock groups must leave room for assets beneath the search controls.
+        let short_dock = ui.available_width() < 640.0 && ui.available_height() < 360.0;
+        let format_label = self.tr("Formats", "Formats").to_owned();
+        let filters = |ui: &mut Ui| {
             let groups: [(Option<FormatGroup>, &str, &str); 9] = [
                 (None, "Tout", "All"),
                 (Some(FormatGroup::Oracle), "Fichiers Oracle", "Oracle files"),
@@ -560,7 +577,12 @@ impl LibraryBrowser {
                     }
                 }
             }
-        });
+        };
+        if short_dock {
+            ui.menu_button(format_label, |ui| { ui.vertical(filters); });
+        } else {
+            ui.horizontal_wrapped(filters);
+        }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let n = self.results.len();
@@ -803,7 +825,7 @@ impl LibraryBrowser {
             ui.label(RichText::new(self.tr("MES TAGS", "MY TAGS")).small().weak());
             ui.horizontal_wrapped(|ui| {
                 for tag in self.user.tags_of(&asset.id) {
-                    let r = ui.add(egui::Button::new(RichText::new(format!("{tag}  ×")).color(Color32::WHITE)).fill(self.accent).corner_radius(4.0));
+                    let r = ui.add(egui::Button::new(RichText::new(format!("{tag}  ×")).color(on_accent(self.accent))).fill(self.accent).corner_radius(4.0));
                     if r.on_hover_text(self.tr("Retirer ce tag", "Remove this tag")).clicked() {
                         self.user.remove_tag(&asset.id, &tag);
                         self.revision += 1;
@@ -936,6 +958,15 @@ fn section_title(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
+fn on_accent(accent: Color32) -> Color32 {
+    let linear = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let luminance = 0.2126 * linear(accent.r()) + 0.7152 * linear(accent.g()) + 0.0722 * linear(accent.b());
+    if luminance > 0.179 { Color32::BLACK } else { Color32::WHITE }
+}
+
 fn side_item(ui: &mut Ui, accent: Color32, label: &str, count: Option<usize>, on: bool) -> egui::Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
@@ -943,16 +974,16 @@ fn side_item(ui: &mut Ui, accent: Color32, label: &str, count: Option<usize>, on
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
     let v = ui.visuals();
     if on {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), accent);
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, accent);
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), v.widgets.hovered.weak_bg_fill);
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, v.widgets.hovered.weak_bg_fill);
     }
-    let text_color = if on { Color32::WHITE } else { v.text_color() };
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(13.0), text_color);
+    let text_color = if on { on_accent(accent) } else { v.text_color() };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.0), text_color);
     let clip = Rect::from_min_max(rect.min, egui::pos2(rect.right() - 48.0, rect.bottom()));
     ui.painter().with_clip_rect(clip).galley(rect.left_center() + vec2(8.0, -galley.size().y / 2.0), galley, text_color);
     if let Some(n) = count {
-        let c = if on { Color32::from_white_alpha(200) } else { v.weak_text_color() };
+        let c = if on { text_color.gamma_multiply(200.0 / 255.0) } else { v.weak_text_color() };
         ui.painter().text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, n.to_string(), egui::FontId::proportional(11.5), c);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -960,6 +991,6 @@ fn side_item(ui: &mut Ui, accent: Color32, label: &str, count: Option<usize>, on
 
 fn chip(ui: &mut Ui, accent: Color32, label: &str, on: bool) -> egui::Response {
     let v = ui.visuals().clone();
-    let (fill, text) = if on { (accent, Color32::WHITE) } else { (v.widgets.inactive.weak_bg_fill, v.text_color()) };
-    ui.add(egui::Button::new(RichText::new(label).color(text).size(12.5)).fill(fill).corner_radius(4.0).min_size(vec2(0.0, 24.0)))
+    let (fill, text) = if on { (accent, on_accent(accent)) } else { (v.widgets.inactive.weak_bg_fill, v.text_color()) };
+    ui.add(egui::Button::new(RichText::new(label).color(text).size(12.0)).fill(fill).corner_radius(0.0).min_size(vec2(0.0, 24.0)))
 }

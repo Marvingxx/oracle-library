@@ -4,6 +4,58 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use oracle_library_ui::LibraryBrowser;
 
+#[test]
+fn compact_dock_indexes_and_searches_the_shared_folder() {
+    let root = std::env::temp_dir().join(format!("oracle-library-compact-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["Metal.svg", "Papier.svg"] {
+        std::fs::write(root.join(name), br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#).unwrap();
+    }
+    let mut browser = LibraryBrowser::with_settings(None);
+    browser.set_root(root);
+    let mut harness = Harness::builder().with_size(egui::vec2(300.0, 720.0))
+        .build_ui_state(|ui, b: &mut LibraryBrowser| b.ui(ui), browser);
+    for _ in 0..200 {
+        harness.step();
+        if harness.state().is_ready() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(harness.state().is_ready());
+    harness.step();
+    harness.get_by_label_contains("2 ressources");
+    harness.state_mut().set_search("Metal");
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("1 ressource");
+    harness.get_by_label("Dossier…");
+}
+
+#[test]
+fn short_dock_leaves_room_for_assets_and_keeps_format_filters_available() {
+    let root = std::env::temp_dir().join(format!("oracle-library-short-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("Metal.svg"), br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#).unwrap();
+    let mut browser = LibraryBrowser::with_settings(None);
+    browser.set_root(root);
+    let mut harness = Harness::builder().with_size(egui::vec2(300.0, 250.0))
+        .build_ui_state(|ui, b: &mut LibraryBrowser| b.ui(ui), browser);
+    for _ in 0..200 {
+        harness.step();
+        if harness.state().is_ready() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(harness.state().is_ready());
+    harness.step();
+    let counter = harness.get_by_label_contains("1 ressource");
+    assert!(counter.rect().bottom() < 160.0, "the asset grid needs visible space below the controls");
+    harness.get_by_label("Formats").click();
+    harness.step();
+    harness.get_by_label("Images").click();
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("0 ressource");
+}
+
 fn library() -> std::path::PathBuf {
     // A fixed folder: the browser shows its path, which is in the snapshot.
     let dir = std::env::temp_dir().join("oracle-library-ui");

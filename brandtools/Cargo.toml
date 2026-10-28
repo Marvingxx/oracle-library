@@ -1,0 +1,29 @@
+[package]
+name = "oracle-brandtools"
+description = "Logo grids, clearspace, lockups and bento layouts computed from a logo's real vector geometry, for every Oracle app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["svg"]
+# Reading logos from SVG files (and the oracle-grids tool). Apps that build the logo from their own
+# geometry, like Oracle Vector, leave it out.
+svg = ["dep:usvg"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+usvg = { version = "0.45", optional = true }
+
+[dev-dependencies]
+resvg = "0.45"
+
+[[bin]]
+name = "oracle-grids"
+path = "src/bin/oracle-grids.rs"
+required-features = ["svg"]
+
+[[example]]
+name = "apercu"
+required-features = ["svg"]

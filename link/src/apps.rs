@@ -13,7 +13,8 @@ use std::process::Command;
 pub enum App {
     Edit,
     Vector,
-    Guide,
+    /// Page layout (the InDesign equivalent); Oracle Brand Guide until 28/10/2026.
+    Layout,
     Motion,
     Video,
     BrandKit,
@@ -22,14 +23,14 @@ pub enum App {
 }
 
 impl App {
-    pub const ALL: [App; 8] = [App::Edit, App::Vector, App::Guide, App::Motion, App::Video, App::BrandKit, App::MockupStudio, App::Suite];
+    pub const ALL: [App; 8] = [App::Edit, App::Vector, App::Layout, App::Motion, App::Video, App::BrandKit, App::MockupStudio, App::Suite];
 
     /// The app's id, as the launcher's catalog names it.
     pub fn id(self) -> &'static str {
         match self {
             App::Edit => "oracle-edit",
             App::Vector => "oracle-vector",
-            App::Guide => "oracle-guide",
+            App::Layout => "oracle-layout",
             App::Motion => "oracle-motion",
             App::Video => "oracle-video",
             App::BrandKit => "oracle-brand-kit",
@@ -43,7 +44,7 @@ impl App {
         match self {
             App::Edit => "Oracle Edit",
             App::Vector => "Oracle Vector",
-            App::Guide => "Oracle Brand Guide",
+            App::Layout => "Oracle Layout",
             App::Motion => "Oracle Motion",
             App::Video => "Oracle Video",
             App::BrandKit => "Oracle Brand Kit",
@@ -62,7 +63,7 @@ impl App {
         match self {
             App::Edit => "oracle-edit",
             App::Vector => "oracle-vector",
-            App::Guide => "oracle-guide",
+            App::Layout => "oracle-layout",
             App::Motion => "oracle-motion",
             App::Video => "oracle-video",
             App::BrandKit | App::MockupStudio => "oracle-brand",
@@ -75,11 +76,20 @@ impl App {
         match self {
             App::Edit => Some("oracle-edit-cli"),
             App::Vector => Some("oracle-vector-cli"),
-            App::Guide => Some("oracle-guide-cli"),
+            App::Layout => Some("oracle-layout-cli"),
             App::Motion => Some("oracle-motion-cli"),
             App::Video => Some("oracle-video-cli"),
             App::BrandKit => Some("oracle-brand"),
             App::MockupStudio | App::Suite => None,
+        }
+    }
+
+    /// What the app was installed as under an earlier name (folder name, program, command line), so
+    /// an install made before a rename keeps being found until the new one replaces it.
+    fn legacy(self) -> Option<(&'static str, &'static str, &'static str)> {
+        match self {
+            App::Layout => Some(("Oracle Brand Guide", "oracle-guide", "oracle-guide-cli")),
+            _ => None,
         }
     }
 
@@ -89,12 +99,18 @@ impl App {
 
     /// The app itself (the program that opens a window), if it can be found.
     pub fn exe(self) -> Option<PathBuf> {
-        find(self, self.id(), &self.env_key("EXE"))
+        find(self, self.id(), &self.env_key("EXE")).or_else(|| {
+            let (folder, stem, _) = self.legacy()?;
+            find_legacy(folder, stem)
+        })
     }
 
     /// The app's command-line engine, if it has one and it can be found.
     pub fn cli(self) -> Option<PathBuf> {
-        find(self, self.cli_stem()?, &self.env_key("CLI"))
+        find(self, self.cli_stem()?, &self.env_key("CLI")).or_else(|| {
+            let (folder, _, stem) = self.legacy()?;
+            find_legacy(folder, stem)
+        })
     }
 }
 
@@ -111,6 +127,22 @@ fn find(app: App, stem: &str, env: &str) -> Option<PathBuf> {
     }
     let exe = format!("{stem}{}", std::env::consts::EXE_SUFFIX);
     candidates(app).into_iter().map(|dir| dir.join(&exe)).find(|p| p.is_file())
+}
+
+/// An install under an app's former name: its installer's folders only.
+fn find_legacy(folder: &str, stem: &str) -> Option<PathBuf> {
+    let exe = format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+    let mut dirs = Vec::new();
+    for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(var) {
+            dirs.push(PathBuf::from(root).join(folder));
+        }
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        dirs.push(local.join(folder));
+        dirs.push(local.join("Programs").join(folder));
+    }
+    dirs.into_iter().map(|d| d.join(&exe)).find(|p| p.is_file())
 }
 
 /// The folders an app's programs may be in, most likely first.

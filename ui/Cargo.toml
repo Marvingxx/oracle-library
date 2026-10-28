@@ -13,6 +13,7 @@ log = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "webp", "bmp"] }
 resvg = "0.45"
 rfd = "0.17"
+craft-ui = { git = "https://github.com/Marvingxx/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
 
 # The pointer at a file drop (winit's drops carry no position): in_app::os_pointer.
 [target.'cfg(windows)'.dependencies]

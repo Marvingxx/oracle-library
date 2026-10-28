@@ -1,5 +1,5 @@
-//! The library inside an Oracle app: a floating "Bibliothèque" window, and dragging an asset from
-//! it onto the document.
+//! The shared library inside an Oracle app, in a dock or a floating window, with assets dragged
+//! onto the document.
 //!
 //! A drag that ends outside the library window becomes a file drop, exactly as if the file had
 //! been dragged in from the Explorer: [`InAppLibrary::inject_drops`] adds it to egui's
@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, Id, Order, RichText};
+use egui::{Id, Order, RichText};
 
 use crate::{LibraryBrowser, Request};
 
@@ -23,6 +23,8 @@ pub struct InAppLibrary {
     /// Files to drop on the document at the next frame.
     drops: Vec<PathBuf>,
     window_rect: Option<egui::Rect>,
+    panel_rect: Option<egui::Rect>,
+    panel_frame: u64,
     /// The app window's client origin (points) and points-to-pixels scale, as of the last frame:
     /// to read the pointer from the OS at a drop.
     client: Option<(egui::Pos2, f32)>,
@@ -30,11 +32,28 @@ pub struct InAppLibrary {
 
 impl InAppLibrary {
     pub fn new(app_id: &'static str) -> InAppLibrary {
-        InAppLibrary { open: false, app_id, browser: None, dragging: None, drops: Vec::new(), window_rect: None, client: None }
+        InAppLibrary { open: false, app_id, browser: None, dragging: None, drops: Vec::new(), window_rect: None, panel_rect: None, panel_frame: 0, client: None }
     }
 
     pub fn toggle(&mut self) {
         self.open = !self.open;
+    }
+
+    /// Updates asset dragging for a host-managed dock. Returns an activation request
+    /// (for example after Add to Library); the host opens its existing library tab.
+    /// Floating and closing are owned by the host's docking layout, never by this browser.
+    pub fn update_docked(&mut self, ctx: &egui::Context) -> bool {
+        self.update_drag(ctx);
+        self.window_rect = None;
+        std::mem::take(&mut self.open)
+    }
+
+    fn update_drag(&mut self, ctx: &egui::Context) {
+        self.client = ctx.input(|i| i.viewport().inner_rect).map(|r| (r.min, ctx.pixels_per_point()));
+        self.follow_drag(ctx);
+        if self.panel_frame != ctx.cumulative_frame_nr() {
+            self.panel_rect = None;
+        }
     }
 
     /// Files dropped on the library window go into the library rather than onto the document. Call
@@ -42,20 +61,37 @@ impl InAppLibrary {
     /// pointer's position at the drop if the app knows it (`None`: it is read from the OS where it
     /// can be; unknown, the drop is left to the app). Returns whether the drop was taken.
     pub fn claim_drops(&mut self, raw: &mut egui::RawInput, at: Option<egui::Pos2>) -> bool {
-        if raw.dropped_files.is_empty() || !self.open {
+        if raw.dropped_files.is_empty() {
             return false;
         }
         let at = at.or_else(|| self.os_pointer());
-        let over = match (at, self.window_rect) {
-            (Some(p), Some(r)) => self.open && r.contains(p),
-            _ => false,
-        };
+        let over = at.is_some_and(|p| self.contains(p));
         if !over || raw.dropped_files.is_empty() {
             return false;
         }
         let files: Vec<PathBuf> = raw.dropped_files.drain(..).map(|f| f.path().to_path_buf()).filter(|p| p.is_absolute()).collect();
-        self.add_files(&files);
+        let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
+        let _ = browser.add_files(&files);
         true
+    }
+
+    fn contains(&self, p: egui::Pos2) -> bool {
+        (self.open && self.window_rect.is_some_and(|r| r.contains(p)))
+            || self.panel_rect.is_some_and(|r| r.contains(p))
+    }
+
+    /// The same shared library inside a dock. Its compact layout keeps search and tiles visible.
+    pub fn panel_ui(&mut self, ui: &mut egui::Ui, french: bool) {
+        let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
+        browser.french = french;
+        browser.accent = ui.visuals().hyperlink_color;
+        self.panel_rect = Some(ui.available_rect_before_wrap());
+        self.panel_frame = ui.ctx().cumulative_frame_nr();
+        browser.ui(ui);
+        let requests = browser.take_requests();
+        for request in requests {
+            self.handle(request, ui.ctx());
+        }
     }
 
     /// The pointer in points of the app window, read from the OS (winit's file drops carry no
@@ -100,14 +136,15 @@ impl InAppLibrary {
     /// Draws the window (when open) and the drag in progress. Call once per frame. `french`
     /// picks the interface language.
     pub fn ui(&mut self, ctx: &egui::Context, french: bool) {
-        self.client = ctx.input(|i| i.viewport().inner_rect).map(|r| (r.min, ctx.pixels_per_point()));
-        self.follow_drag(ctx);
+        // Logic runs before docks are drawn: the previous frame's rectangle is the drop target.
+        self.update_drag(ctx);
         if !self.open {
             self.window_rect = None;
             return;
         }
         let browser = self.browser.get_or_insert_with(LibraryBrowser::new);
         browser.french = french;
+        browser.accent = ctx.global_style().visuals.hyperlink_color;
         let title = if french { "Bibliothèque Oracle" } else { "Oracle Library" };
         let mut open = self.open;
         let shown = egui::Window::new(title)
@@ -185,10 +222,7 @@ impl InAppLibrary {
         let (pos, released) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released() || !i.pointer.any_down()));
         if released {
             self.dragging = None;
-            let over_window = match (pos, self.window_rect) {
-                (Some(p), Some(r)) => r.contains(p),
-                _ => false,
-            };
+            let over_window = pos.is_some_and(|p| self.contains(p));
             if !over_window && pos.is_some() {
                 self.drops.push(file.clone());
                 self.used(&file);
@@ -199,8 +233,9 @@ impl InAppLibrary {
         if let Some(p) = pos {
             let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             egui::Area::new(Id::new("oracle-library-drag")).order(Order::Tooltip).fixed_pos(p + egui::vec2(14.0, 14.0)).interactable(false).show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).fill(crate::ORACLE_RED).show(ui, |ui| {
-                    ui.label(RichText::new(format!("+ {name}")).color(Color32::WHITE));
+                let accent = ui.visuals().hyperlink_color;
+                egui::Frame::popup(ui.style()).fill(accent).show(ui, |ui| {
+                    ui.label(RichText::new(format!("+ {name}")).color(crate::on_accent(accent)));
                 });
             });
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -258,4 +293,60 @@ fn reveal(file: &Path) -> Result<(), String> {
     }
     #[allow(unreachable_code)]
     open_with_system(file.parent().unwrap_or(file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docked_library_consumes_reveal_requests_without_opening_the_legacy_window() {
+        let ctx = egui::Context::default();
+        let mut library = InAppLibrary::new("oracle-edit");
+        library.open = true;
+        assert!(library.update_docked(&ctx));
+        assert!(!library.open);
+        assert!(!library.update_docked(&ctx));
+    }
+
+    #[test]
+    fn dock_remains_a_drop_target_when_the_floating_window_is_closed() {
+        let mut library = InAppLibrary::new("oracle-vector");
+        library.panel_rect = Some(egui::Rect::from_min_size(egui::pos2(700.0, 40.0), egui::vec2(300.0, 500.0)));
+        library.window_rect = Some(egui::Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(500.0, 400.0)));
+        assert!(library.contains(egui::pos2(800.0, 100.0)));
+        assert!(!library.contains(egui::pos2(100.0, 100.0)));
+        library.open = true;
+        assert!(library.contains(egui::pos2(100.0, 100.0)));
+        assert!(!library.contains(egui::pos2(600.0, 600.0)));
+    }
+
+    #[test]
+    fn releasing_in_the_previous_frames_dock_does_not_place_an_asset() {
+        let ctx = egui::Context::default();
+        let mut library = InAppLibrary::new("oracle-vector");
+        let rect = egui::Rect::from_min_size(egui::pos2(700.0, 40.0), egui::vec2(300.0, 500.0));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            library.panel_rect = Some(rect);
+            library.panel_frame = ui.ctx().cumulative_frame_nr();
+        });
+        out.textures_delta.clear();
+        library.dragging = Some(PathBuf::from("asset.svg"));
+        let mut out = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(egui::pos2(800.0, 100.0))],
+            ..Default::default()
+        }, |ui| library.ui(ui.ctx(), false));
+        out.textures_delta.clear();
+        assert!(library.drops.is_empty());
+        assert!(library.dragging.is_none());
+        assert!(library.panel_rect.is_none());
+
+        library.dragging = Some(PathBuf::from("asset.svg"));
+        let mut out = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))],
+            ..Default::default()
+        }, |ui| library.ui(ui.ctx(), false));
+        out.textures_delta.clear();
+        assert_eq!(library.drops, vec![PathBuf::from("asset.svg")]);
+    }
 }
